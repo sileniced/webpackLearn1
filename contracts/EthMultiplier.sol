@@ -1,4 +1,4 @@
-pragma solidity ^0.4.10;
+pragma solidity ^0.4.8;
 
 contract EthMultiplier {
 
@@ -17,84 +17,11 @@ contract EthMultiplier {
 //******************************************************************************
 //***** ENTITIES ***************************************************************
 //******************************************************************************
-
-//***** INVESTOR ***************************************************************
-    
-    struct Investor {
-        uint invested;
-        uint paidOut;
-        uint16 lastInvestmentId;
-    }
-    mapping (address => Investor) public investor;
-    
-    function getInvestorBalance(address addr) returns(uint) {
-        return addr.balance;
-    }
-
-    function getInvested(address addr) returns(uint) {
-        return investor[addr].invested;
-    }
-
-    function getPaidOut(address addr) returns(uint) {
-        return investor[addr].paidOut;
-    }
-    
-    function getLastInvestmentId(address addr) returns(uint16) {
-        return investor[addr].lastInvestmentId;
-    }
-
-    function getPromised(address addr) returns(uint) {
-        return investor[addr].invested * (100 + payoutPercentage) / 100;
-    }
-
-    function getRemainingPayout(address addr) returns(uint) {
-        return getPromised(addr) - investor[addr].paidOut;
-    }
-
-    function getIsPaidOut(address addr) returns(bool) {
-        return getPromised(addr) == investor[addr].paidOut;
-    }
-
-    function getProfit(address addr) returns(uint) {
-        if (investor[addr].invested > investor[addr].paidOut) return 0;
-        return investor[addr].paidOut - investor[addr].invested;
-    }
-
-
-//******************************************************************************
-//***** CALCULATE REQUIRED INVESTMENT FOR PAYOUT BY ADDRESS FUNCTION ***********
-//******************************************************************************
-
-    event manualCheckInvestmentRequiredByAddress(address investor, uint investmentRequired);
-    
-    function eventCheckInvestmentRequiredByAddress(address investor) {
-        manualCheckInvestmentRequiredByAddress(investor, checkInvestmentRequiredByAddress(investor));
-    }
-
-    modifier awaitingPayoutAddress(address _investor) {
-        if (getIsPaidOut(_investor)) throw;
-        _;
-    }
-
-    function checkInvestmentRequiredByAddress(address _investor)
-    awaitingPayoutAddress(_investor)
-    returns(uint) {
-        if (this.balance > 0) payout();
-        uint amount;
-        uint16 lastInvestment = investor[_investor].lastInvestmentId;
-        for (uint16 i = payoutIdx; i <= lastInvestment; i++) {
-            amount += investment[i].remainingPayout;
-        }
-        
-        return addFees(amount);
-    }
-    
     
 //***** INVESTMENT *************************************************************
     
     struct Investment {
         address addr;
-        uint investment;
         uint remainingPayout;
     }
     mapping (uint16 => Investment) public investment;
@@ -105,10 +32,6 @@ contract EthMultiplier {
 
     function getRemainingPayoutById(uint16 id) returns(uint) {
         return investment[id].remainingPayout;
-    }
-
-    function getInvestmentById(uint16 id) returns(uint) {
-        return investment[id].investment;
     }
 
     function getIsPaidOutById(uint16 id) returns(bool) {
@@ -146,23 +69,29 @@ contract EthMultiplier {
     
 //***** TOTALS *****************************************************************
 
-    uint public totalInvested;
     uint public totalPaidOut;
-
-    function getTotalInvested() returns(uint) {
-        return totalInvested;
-    }
 
     function getTotalPaidOut() returns(uint) {
         return totalPaidOut;
     }
-
-    function getTotalPromised() returns(uint) {
-        return totalInvested * (100 + payoutPercentage) / 100;
+    
+    function getTotalInvestments() returns(uint16) {
+        return (id == 0) ? 0 : id - 1;
+    }
+    
+    function getTotalInvestmentsAwaitingPayout() returns(uint16) {
+        return id - payoutIdx;
+    }
+    
+    function getTotalInvestmentsPaidOut() returns(uint16 count) {
+        return (id == 0 || payoutIdx == 0) ? 0 : payoutIdx - 1;
     }
 
-    function getTotalRemainingPayout() returns(uint) {
-        return getTotalPromised() - totalPaidOut;
+    function getTotalRemainingPayout() returns(uint total) {
+        if (id == 0 || payoutIdx == 0) return 0;
+        for (uint16 i = id - 1; investment[i].remainingPayout > 0; i--) {
+            total += investment[i].remainingPayout;
+        }
     }
 
 
@@ -174,11 +103,7 @@ contract EthMultiplier {
     uint8 public payoutPercentage = 25;
     bool public isSmartContractForSale = true;
     uint public smartContractPrice = 25 ether;
-    
-    function getBalance() returns(uint) {
-        return this.balance;
-    }
-    
+
     function getOwner() returns(address) {
         return owner;
     }
@@ -213,6 +138,10 @@ contract EthMultiplier {
     
     function calculatePayout(uint value) private returns(uint) {
         return value * (100 + payoutPercentage) / 100;
+    }
+
+    function getBalance() returns(uint) {
+        return this.balance;
     }
 
 
@@ -263,17 +192,19 @@ contract EthMultiplier {
     
     function check(uint investmentValue) private returns(uint) {
         if (investmentValue < 1 finney) {
-            msg.sender.transfer(investmentValue);
+            if (!msg.sender.send(investmentValue)) throw;
             return 0;
         }
         
         if (investmentValue > maximumInvestment) {
-            msg.sender.transfer(maximumInvestment - investmentValue);
+            if (!msg.sender.send(maximumInvestment - investmentValue)) throw;
             investmentValue = maximumInvestment;
         }
         
         // send fees
-        owner.transfer(calculateFee(investmentValue));
+        uint fee = calculateFee(investmentValue);
+        if (!owner.send(fee)) throw;
+        totalPaidOut += investmentValue - fee;
         
         return investmentValue;
     }
@@ -282,16 +213,9 @@ contract EthMultiplier {
     function save(uint investmentValue) private returns(bool) {
         if (investmentValue == 0) return false;
         
-        // save investor
-        investor[msg.sender].invested += investmentValue;
-        investor[msg.sender].lastInvestmentId = id++;
-        
         // save investment
         investment[id].addr = msg.sender;
         investment[id].remainingPayout = calculatePayout(investmentValue);
-        
-        // add to totals
-        totalInvested += investmentValue;
         
         return true;
     }
@@ -299,30 +223,20 @@ contract EthMultiplier {
     
     function payout() {
         uint balance = this.balance;
-        uint payoutRound;
         uint remaining;
         address payoutTo;
         
         while (balance > 0) {
             payoutTo = investment[payoutIdx].addr;
             remaining = investment[payoutIdx].remainingPayout;
-            if (remaining > balance) {
+            if (balance < remaining) {
                 investment[payoutIdx].remainingPayout -= balance;
-                investor[payoutTo].paidOut += balance;
-                totalPaidOut += payoutRound + balance;
-                payoutTo.transfer(balance);
+                if (!payoutTo.send(balance)) throw;
                 return;
             } else {
                 delete investment[payoutIdx++].remainingPayout;
-                investor[payoutTo].paidOut += remaining;
-                payoutTo.transfer(remaining);
-                if (balance == remaining) {
-                    totalPaidOut += payoutRound + remaining;
-                    return;
-                } else {
-                    payoutRound += remaining;
-                    balance -= remaining;
-                }
+                if (!payoutTo.send(remaining)) throw;
+                balance -= remaining;
             }
         }
     }
@@ -346,11 +260,11 @@ contract EthMultiplier {
         || msg.sender == owner) throw;
         _;
         if (msg.value > smartContractPrice)
-            msg.sender.transfer(msg.value - smartContractPrice);
+            if (!msg.sender.send(msg.value - smartContractPrice)) throw;
     }
 
     function buySmartContract() payable isForSale {
-        owner.transfer(smartContractPrice);
+        if (!owner.send(smartContractPrice)) throw;
         owner = msg.sender;
         isSmartContractForSale = false;
         newOwner(smartContractPrice);
@@ -365,6 +279,7 @@ contract EthMultiplier {
         if (msg.sender != owner) throw;
         _;
     }
+
 
 //******************************************************************************
 //***** CHANGE OWNER FUNCTION **************************************************
@@ -401,11 +316,13 @@ contract EthMultiplier {
 //******************************************************************************
 
 // the fees cannot be higher than 25%
+// it also cannot be higher than the payout percentage
+// because I won't allow that you give yourself more than the investor
 
     event newFeePercentageIsSet(uint8 percentage);
 
     modifier FPLimits(uint8 _percentage) {
-        if (_percentage > 25) throw;
+        if (_percentage > 25 || _percentage > payoutPercentage) throw;
         _;
     }
 
@@ -422,6 +339,7 @@ contract EthMultiplier {
 
 // payout cannot be higher than 200% (== triple the investment)
 // it also cannot be lower than the fee percentage
+// because I won't allow that you give yourself more than the investor
 
     event newPayOutPercentageIsSet(uint percentageOnTopOfDeposit);
 
@@ -457,6 +375,7 @@ contract EthMultiplier {
 //******************************************************************************
 
 // smart contract price cannot be lower or equal than the maximum investment
+// because that would create a conflict in the fallback function
 
     event smartContractPriceIsSet(uint price);
 
