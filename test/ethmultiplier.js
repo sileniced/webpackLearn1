@@ -1,14 +1,18 @@
 var EthMultiplier = artifacts.require("./EthMultiplier.sol");
 
 contract('EthMultiplier', function(accounts) {
-    it("should save a player has invested", function() {
+    it("should make the deployer the owner", function() {
 
-        var account_one = accounts[0];
+        var expectedOwner = accounts[0];
 
         return EthMultiplier.deployed().then(function(instance) {
-            return instance.call(1000000000000000000, {from: account_one})
-        }).then(function() {
-            
+            return instance.getOwner.call()
+        }).then(function(owner) {
+            assert.equal(owner, expectedOwner, "Deployer is not the owner");
         })
-    })
+    });
+
+    it("should give 90% back in the first fallback", function() {
+        
+    });
 });

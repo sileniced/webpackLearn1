@@ -26,6 +26,10 @@ contract EthMultiplier {
         uint16 lastInvestmentId;
     }
     mapping (address => Investor) public investor;
+    
+    function getInvestorBalance(address addr) returns(uint) {
+        return addr.balance;
+    }
 
     function getInvested(address addr) returns(uint) {
         return investor[addr].invested;
@@ -170,7 +174,11 @@ contract EthMultiplier {
     uint8 public payoutPercentage = 25;
     bool public isSmartContractForSale = true;
     uint public smartContractPrice = 25 ether;
-
+    
+    function getBalance() returns(uint) {
+        return this.balance;
+    }
+    
     function getOwner() returns(address) {
         return owner;
     }
@@ -199,12 +207,12 @@ contract EthMultiplier {
         return value * feePercentage / 100;
     }
     
-    function calculatePayout(uint value) private returns(uint) {
-        return value * (100 + payoutPercentage) / 100;
-    }
-    
     function addFees(uint value) private returns(uint) {
         return value * 100 / (100 - feePercentage);
+    }
+    
+    function calculatePayout(uint value) private returns(uint) {
+        return value * (100 + payoutPercentage) / 100;
     }
 
 
@@ -217,7 +225,7 @@ contract EthMultiplier {
 //******************************************************************************
 
     function EthMultiplier() {
-        owner = msg.sender; 
+        owner = tx.origin; 
         smartContractSaleStarted(smartContractPrice);
     }
 
@@ -308,7 +316,6 @@ contract EthMultiplier {
                 delete investment[payoutIdx++].remainingPayout;
                 investor[payoutTo].paidOut += remaining;
                 payoutTo.transfer(remaining);
-                
                 if (balance == remaining) {
                     totalPaidOut += payoutRound + remaining;
                     return;
@@ -319,6 +326,7 @@ contract EthMultiplier {
             }
         }
     }
+
 
 //******************************************************************************
 //***** BUY SMART CONTRACT FUNCTION ********************************************
@@ -358,6 +366,14 @@ contract EthMultiplier {
         _;
     }
 
+//******************************************************************************
+//***** CHANGE OWNER FUNCTION **************************************************
+//******************************************************************************
+
+    function changeOwner(address _newOwner) onlyOwner {
+        owner = _newOwner;
+    }
+
 
 //******************************************************************************
 //***** SET MAXIMUM INVESTMENT FUNCTION ****************************************
@@ -378,7 +394,6 @@ contract EthMultiplier {
         maximumInvestment = _maximum;
         newMaximumInvestmentIsSet(_maximum);
     }
-
 
 
 //******************************************************************************
