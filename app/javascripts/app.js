@@ -76,7 +76,7 @@ window.App = {
     MetaCoin.deployed().then(function(instance) {
       meta = instance;
       return meta.sendCoin(receiver, amount, {from: account});
-    }).then(function() {
+    }).then(function() { 
       self.setStatus("Transaction complete!");
       self.refreshBalance();
     }).catch(function(e) {

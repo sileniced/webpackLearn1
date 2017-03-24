@@ -1,5 +1,12 @@
 pragma solidity ^0.4.8;
 
+contract EthMultiplierFactory {
+    
+    function deploy() returns (address){
+        return new EthMultiplier();
+    }
+}
+
 contract EthMultiplier {
 
 //*****************************           **************************************
@@ -23,6 +30,7 @@ contract EthMultiplier {
     struct Investment {
         address addr;
         uint remainingPayout;
+        uint time;
     }
     mapping (uint16 => Investment) public investment;
 
@@ -88,23 +96,15 @@ contract EthMultiplier {
         return (payout_id == 0) ? 0 : payout_id - 1;
     }
 
-    function getTotalRemainingPayout() returns(uint total) {
-        if (id == 0) return 0;
-        uint16 i = id - 1;
-        while(investment[i].remainingPayout > 0) {
-            total += investment[i--].remainingPayout;
-        }
-    }
-
 
 //***** SMART CONTRACT *********************************************************
 
     address public owner;
-    uint public maximumInvestment = 10 ether;
-    uint8 public feePercentage = 10;
-    uint8 public payoutPercentage = 25;
-    bool public isSmartContractForSale = true;
-    uint public smartContractPrice = 25 ether;
+    uint public maximumInvestment;
+    uint8 public feePercentage;
+    uint8 public payoutPercentage;
+    bool public isSmartContractForSale;
+    uint public smartContractPrice;
 
     function getOwner() returns(address) {
         return owner;
@@ -134,6 +134,25 @@ contract EthMultiplier {
         return this.balance;
     }
 
+
+//***** RISK ASSESSMENT ********************************************************
+
+    bool public isRiskAssassmentAllowed;
+    
+    modifier riskAssessmentIsAllowed() {
+        if (!isRiskAssassmentAllowed) throw;
+        _;
+    }
+
+    function getTotalRemainingPayout() riskAssessmentIsAllowed returns(uint total) {
+        if (id == 0) return 0;
+        uint16 i = id - 1;
+        while(investment[i].remainingPayout > 0) {
+            total += investment[i--].remainingPayout;
+        }
+    }
+
+
 //*****************************           **************************************
 //***************************** FUNCTIONS **************************************
 //*****************************           **************************************
@@ -144,6 +163,12 @@ contract EthMultiplier {
 
     function EthMultiplier() {
         owner = tx.origin; 
+        maximumInvestment = 10 ether;
+        feePercentage = 10;
+        payoutPercentage = 25;
+        isSmartContractForSale = true;
+        smartContractPrice = 25 ether;
+        isRiskAssassmentAllowed = true;
         smartContractSaleStarted(smartContractPrice);
     }
 
@@ -160,7 +185,8 @@ contract EthMultiplier {
         if (msg.value >= smartContractPrice) {
             buySmartContract();
         } else {
-            if (invest() && msg.gas > 100000) payout(true);
+            invest();
+            if (msg.gas > 100000) payout(isRiskAssassmentAllowed);
         }
     }
 
@@ -175,13 +201,13 @@ contract EthMultiplier {
 
 // Always correctly identify the risk related before investing in this smart contract.
 
-    function invest() payable returns (bool) {
+    function invest() payable {
         uint val = msg.value;
         
         // check investment
         if (val < 1 finney) {
             if (!msg.sender.send(val)) throw;
-            return false;
+            return;
         }
         if (val > maximumInvestment) {
             if (!msg.sender.send(val - maximumInvestment)) throw;
@@ -194,9 +220,9 @@ contract EthMultiplier {
         
         // save investment
         investment[id].addr = msg.sender;
-        investment[id++].remainingPayout = val * (100 + payoutPercentage) / 100;
+        investment[id].remainingPayout = val * (100 + payoutPercentage) / 100;
+        investment[id++].time = now;
         totalPaidOut += val - fee;
-        return true;
     }
 
 
@@ -204,9 +230,9 @@ contract EthMultiplier {
 //***** PAYOUT FUNCTION ********************************************************
 //******************************************************************************
 
-    event totalRemainingPayout(uint totalRemainingPayout);
+    event totalRemainingPayout(uint total);
     
-    function payout(bool includeEventTotalRemainingPayout) {
+    function payout(bool includeEvent_totalRemainingPayout) {
         uint balance = this.balance;
         uint remaining;
         
@@ -220,7 +246,7 @@ contract EthMultiplier {
         investment[payout_id].remainingPayout -= balance;
         if (!investment[payout_id].addr.send(balance)) throw;
         
-        if (includeEventTotalRemainingPayout && msg.gas > 50000) 
+        if (includeEvent_totalRemainingPayout && msg.gas > 50000) 
             totalRemainingPayout(getTotalRemainingPayout());
         
     }
@@ -346,7 +372,7 @@ contract EthMultiplier {
     event smartContractSaleStarted(uint price);
     event smartContractSaleEnded();
 
-    function putSmartContractOnSale(bool _sell) onlyOwner {
+    function setSmartContractOnSale(bool _sell) onlyOwner {
         isSmartContractForSale = _sell;
         _sell? 
         smartContractSaleStarted(smartContractPrice): 
@@ -374,5 +400,19 @@ contract EthMultiplier {
         smartContractPriceIsSet(_price);
     }
 
+
+//******************************************************************************
+//***** SET RISK ASSESSMENT PERMISSION FUNCTION ********************************
+//******************************************************************************
+
+    event riskAssessmentAllowed();
+    event riskAssessmentDisabled();
+
+    function setAllowRiskAssessment(bool _permission) onlyOwner {
+        isRiskAssassmentAllowed = _permission;
+        _permission? 
+        riskAssessmentAllowed(): 
+        riskAssessmentDisabled();
+    }
 
 }
