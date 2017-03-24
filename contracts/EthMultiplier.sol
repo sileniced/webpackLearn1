@@ -11,7 +11,7 @@ contract EthMultiplier {
 //******************************************************************************
 
     uint16 private id;
-    uint16 private payoutIdx;
+    uint16 private payout_id;
 
 
 //******************************************************************************
@@ -26,15 +26,15 @@ contract EthMultiplier {
     }
     mapping (uint16 => Investment) public investment;
 
-    function getAddressById(uint16 id) returns(address) {
+    function getAddress(uint16 id) returns(address) {
         return investment[id].addr;
     }
 
-    function getRemainingPayoutById(uint16 id) returns(uint) {
+    function getRemainingPayout(uint16 id) returns(uint) {
         return investment[id].remainingPayout;
     }
 
-    function getIsPaidOutById(uint16 id) returns(bool) {
+    function getIsPaidOut(uint16 id) returns(bool) {
         return investment[id].remainingPayout == 0;
     }
 
@@ -50,20 +50,21 @@ contract EthMultiplier {
     }
 
     modifier awaitingPayoutId(uint16 _investmentId) {
-        if (_investmentId > id || _investmentId < payoutIdx) throw;
+        if (_investmentId > id || _investmentId < payout_id) throw;
         _;
     }
 
     function checkInvestmentRequiredById(uint16 _investmentId)
     awaitingPayoutId(_investmentId) 
     returns(uint) {
-        if (this.balance > 0) payout();
+        if (this.balance > 0) payout(true);
         uint amount;
-        for (uint16 i = payoutIdx; i <= _investmentId; i++) {
-            amount += investment[i].remainingPayout;
+        uint16 i = payout_id;
+        while(i <= _investmentId) {
+            amount += investment[i++].remainingPayout;
         }
         
-        return addFees(amount);
+        return amount * 100 / (100 - feePercentage);
     }
     
     
@@ -75,22 +76,23 @@ contract EthMultiplier {
         return totalPaidOut;
     }
     
-    function getTotalInvestments() returns(uint16) {
-        return (id == 0) ? 0 : id - 1;
+    function getTotalInvestments() returns(uint) {
+        return id == 0 ? 0 : id - 1;
     }
     
-    function getTotalInvestmentsAwaitingPayout() returns(uint16) {
-        return id - payoutIdx;
+    function getTotalInvestmentsAwaitingPayout() returns(uint) {
+        return id - payout_id;
     }
     
     function getTotalInvestmentsPaidOut() returns(uint16 count) {
-        return (id == 0 || payoutIdx == 0) ? 0 : payoutIdx - 1;
+        return (payout_id == 0) ? 0 : payout_id - 1;
     }
 
     function getTotalRemainingPayout() returns(uint total) {
-        if (id == 0 || payoutIdx == 0) return 0;
-        for (uint16 i = id - 1; investment[i].remainingPayout > 0; i--) {
-            total += investment[i].remainingPayout;
+        if (id == 0) return 0;
+        uint16 i = id - 1;
+        while(investment[i].remainingPayout > 0) {
+            total += investment[i--].remainingPayout;
         }
     }
 
@@ -127,23 +129,10 @@ contract EthMultiplier {
     function getSmartContractPrice() returns(uint) {
         return smartContractPrice;
     }
-    
-    function calculateFee(uint value) private returns(uint) {
-        return value * feePercentage / 100;
-    }
-    
-    function addFees(uint value) private returns(uint) {
-        return value * 100 / (100 - feePercentage);
-    }
-    
-    function calculatePayout(uint value) private returns(uint) {
-        return value * (100 + payoutPercentage) / 100;
-    }
 
     function getBalance() returns(uint) {
         return this.balance;
     }
-
 
 //*****************************           **************************************
 //***************************** FUNCTIONS **************************************
@@ -167,11 +156,12 @@ contract EthMultiplier {
 // depositing MORE then the price of the smart contract in one transaction 
 // will call the 'buySmartContract' function, and will make you the owner.
 
-    function()
-    payable {
-        msg.value >= smartContractPrice? 
-        buySmartContract(): 
-        invest();
+    function() payable {
+        if (msg.value >= smartContractPrice) {
+            buySmartContract();
+        } else {
+            if (invest() && msg.gas > 100000) payout(true);
+        }
     }
 
 
@@ -185,60 +175,54 @@ contract EthMultiplier {
 
 // Always correctly identify the risk related before investing in this smart contract.
 
-    function invest() payable {
-        if (save(check(msg.value)) && msg.gas > 100000) payout();
-    }
-    
-    
-    function check(uint investmentValue) private returns(uint) {
-        if (investmentValue < 1 finney) {
-            if (!msg.sender.send(investmentValue)) throw;
-            return 0;
+    function invest() payable returns (bool) {
+        uint val = msg.value;
+        
+        // check investment
+        if (val < 1 finney) {
+            if (!msg.sender.send(val)) throw;
+            return false;
+        }
+        if (val > maximumInvestment) {
+            if (!msg.sender.send(val - maximumInvestment)) throw;
+            val = maximumInvestment;
         }
         
-        if (investmentValue > maximumInvestment) {
-            if (!msg.sender.send(maximumInvestment - investmentValue)) throw;
-            investmentValue = maximumInvestment;
-        }
-        
-        // send fees
-        uint fee = calculateFee(investmentValue);
+        // pay fee
+        uint fee = val * feePercentage / 100;
         if (!owner.send(fee)) throw;
-        totalPaidOut += investmentValue - fee;
-        
-        return investmentValue;
-    }
-    
-    
-    function save(uint investmentValue) private returns(bool) {
-        if (investmentValue == 0) return false;
         
         // save investment
         investment[id].addr = msg.sender;
-        investment[id].remainingPayout = calculatePayout(investmentValue);
-        
+        investment[id++].remainingPayout = val * (100 + payoutPercentage) / 100;
+        totalPaidOut += val - fee;
         return true;
     }
+
+
+//******************************************************************************
+//***** PAYOUT FUNCTION ********************************************************
+//******************************************************************************
+
+    event totalRemainingPayout(uint totalRemainingPayout);
     
-    
-    function payout() {
+    function payout(bool includeEventTotalRemainingPayout) {
         uint balance = this.balance;
         uint remaining;
-        address payoutTo;
         
-        while (balance > 0) {
-            payoutTo = investment[payoutIdx].addr;
-            remaining = investment[payoutIdx].remainingPayout;
-            if (balance < remaining) {
-                investment[payoutIdx].remainingPayout -= balance;
-                if (!payoutTo.send(balance)) throw;
-                return;
-            } else {
-                delete investment[payoutIdx++].remainingPayout;
-                if (!payoutTo.send(remaining)) throw;
-                balance -= remaining;
-            }
+        while (balance >= investment[payout_id].remainingPayout) {
+            remaining = investment[payout_id].remainingPayout;
+            delete investment[payout_id].remainingPayout;
+            if (!investment[payout_id++].addr.send(remaining)) throw;
+            balance -= remaining;
         }
+        
+        investment[payout_id].remainingPayout -= balance;
+        if (!investment[payout_id].addr.send(balance)) throw;
+        
+        if (includeEventTotalRemainingPayout && msg.gas > 50000) 
+            totalRemainingPayout(getTotalRemainingPayout());
+        
     }
 
 
@@ -317,7 +301,7 @@ contract EthMultiplier {
 
 // the fees cannot be higher than 25%
 // it also cannot be higher than the payout percentage
-// because I won't allow that you give yourself more than the investor
+// because I couldn't allow that you give yourself more than the investor
 
     event newFeePercentageIsSet(uint8 percentage);
 
@@ -339,7 +323,7 @@ contract EthMultiplier {
 
 // payout cannot be higher than 200% (== triple the investment)
 // it also cannot be lower than the fee percentage
-// because I won't allow that you give yourself more than the investor
+// because I couldn't allow that you give yourself more than the investor
 
     event newPayOutPercentageIsSet(uint percentageOnTopOfDeposit);
 
